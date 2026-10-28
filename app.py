@@ -37,36 +37,38 @@ def simulate_collagen_remodeling(img_bgr, timeline_days, protocol):
     progress_factor = timeline_days / 180.0
     h, w, c = img_bgr.shape
 
-    # 1. Advanced bilateral filtering for realistic pore and micro-texture refinement
-    d_val = int(5 + (5 * progress_factor))
-    sigma_color = 50 + (30 * progress_factor)
-    sigma_space = 50 + (30 * progress_factor)
-    
-    smoothed = cv2.bilateralFilter(img_bgr, d=d_val, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+    # 1. Pronounced texture smoothing simulating collagen density increase over 180 days
+    sigma_val = int(8 * progress_factor)
+    smoothed = cv2.detailEnhance(img_bgr, sigma_s=10 + sigma_val, sigma_r=0.15 + (0.15 * progress_factor))
 
-    # 2. Subtle volumetric tightening/lifting effect for clinical simulation
+    # 2. Stronger bilateral smoothing to clear micro-imperfections and pores
+    smoothed = cv2.bilateralFilter(smoothed, d=9, sigmaColor=75, sigmaSpace=75)
+
+    # 3. Clinical lifting / tightening warp effect for volumetric stimulation
     if protocol in ["Biostimulator (Sculptra)", "RF Microneedling"]:
-        shift_y = int(2 * progress_factor)
+        shift_y = int(4 * progress_factor)
         M = np.float32([[1, 0, 0], [0, 1, -shift_y]])
         lifted = cv2.warpAffine(smoothed, M, (w, h), borderMode=cv2.BORDER_REFLECT)
-        smoothed = cv2.addWeighted(smoothed, 0.6, lifted, 0.4, 0)
+        smoothed = cv2.addWeighted(smoothed, 0.5, lifted, 0.5, 0)
 
-    # 3. Enhance radiance and natural skin warmth in LAB color space (prevents any black-and-white washout)
+    # 4. Vibrant clinical glow and warmth enhancement in LAB color space
     lab = cv2.cvtColor(smoothed, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     
-    # Controlled contrast boost
-    clahe = cv2.createCLAHE(clipLimit=1.0 + (0.5 * progress_factor), tileGridSize=(8, 8))
+    # Noticeable brightening and clarity boost
+    clahe = cv2.createCLAHE(clipLimit=1.5 + (1.0 * progress_factor), tileGridSize=(8, 8))
     cl = clahe.apply(l)
     
-    # Enrich the color warmth channel slightly for a healthy post-treatment glow
-    b_chan = cv2.add(b, int(3 * progress_factor))
+    # Add healthy post-treatment radiance (warmth)
+    b_chan = cv2.add(b, int(6 * progress_factor))
     
     enhanced_lab = cv2.merge((cl, a, b_chan))
     final_output = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
 
-    # Blend with original to keep it entirely natural and realistic
-    blended = cv2.addWeighted(img_bgr, 1.0 - (0.4 * progress_factor), final_output, 0.4 * progress_factor, 0)
+    # Strong blend ratio so the 180-day transformation is striking and clear
+    blend_weight = 0.2 + (0.6 * progress_factor)
+    blended = cv2.addWeighted(img_bgr, 1.0 - blend_weight, final_output, blend_weight, 0)
+    
     return blended
 
 st.sidebar.header("📋 Patient Data & Protocol")
