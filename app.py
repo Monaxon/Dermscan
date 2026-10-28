@@ -10,16 +10,30 @@ st.set_page_config(
 )
 
 st.title("🔬 AesthetiScan AI: Clinical Diagnostic & 180-Day Simulator")
-st.caption("Academic Medical School Prototype | Skin Metrics & Dermal Neocollagenesis Engine")
+st.caption("Academic Medical School Prototype | Precision Dermal Neocollagenesis & Texture Engine")
 
-def isolate_skin_mask(img_bgr):
+def isolate_facial_skin_mask(img_bgr):
+    # Convert to YCrCb for robust skin chromaticity detection
     img_ycbr = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
-    min_YCrCb = np.array([0, 133, 77], np.uint8)
-    max_YCrCb = np.array([255, 173, 127], np.uint8)
+    
+    # Tighter thresholds to exclude bright white clothing (fleece/jackets) and background
+    min_YCrCb = np.array([40, 135, 85], np.uint8)
+    max_YCrCb = np.array([240, 168, 122], np.uint8)
     skin_mask = cv2.inRange(img_ycbr, min_YCrCb, max_YCrCb)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    
+    # Clean up noise using morphological operations
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
     skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
+    
+    # Keep only the largest central contour (assumed to be the face, ignoring background noise)
+    contours, _ = cv2.findContours(skin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        refined_mask = np.zeros_like(skin_mask)
+        cv2.drawContours(refined_mask, [largest_contour], -1, 255, thickness=cv2.FILLED)
+        return refined_mask
+    
     return skin_mask
 
 def compute_skin_metrics(img_bgr, skin_mask):
@@ -42,8 +56,8 @@ def compute_skin_metrics(img_bgr, skin_mask):
         texture_score = 100.0
 
     norm_redness = min(100, max(0, int((redness_index - 0.9) * 200)))
-    norm_texture = min(100, max(0, int(texture_score / 10)))
-    norm_elasticity = max(10, 100 - norm_texture)
+    norm_texture = min(100, max(0, int(texture_score / 8)))
+    norm_elasticity = max(15, 100 - norm_texture)
     
     return {
         "Erythema Index": norm_redness,
@@ -57,31 +71,44 @@ def simulate_collagen_remodeling(img_bgr, skin_mask, timeline_days, protocol):
 
     progress_factor = timeline_days / 180.0
     h, w, c = img_bgr.shape
-    output = img_bgr.copy()
 
-    mask_float = cv2.GaussianBlur(skin_mask.astype(np.float32) / 255.0, (15, 15), 0)
+    # Smooth transition mask
+    mask_float = cv2.GaussianBlur(skin_mask.astype(np.float32) / 255.0, (25, 25), 0)
     mask_3ch = cv2.merge([mask_float, mask_float, mask_float])
 
-    dsigma_s = int(15 * progress_factor) | 1
-    dsigma_r = 0.1 + (0.2 * progress_factor)
-    smoothed = cv2.edgePreservingFilter(img_bgr, flags=1, sigma_s=dsigma_s, sigma_r=dsigma_r)
+    # 1. Micro-texture refinement (simulating neocollagenesis / smoothing fine lines)
+    sigma_s = int(10 * progress_factor) | 1
+    sigma_r = 0.15 + (0.1 * progress_factor)
+    smoothed = cv2.bilateralFilter(img_bgr, d=9, sigmaColor=75*sigma_r, sigmaSpace=75*sigma_s)
 
+    # 2. Structural lifting effect for volumizing/tightening protocols
     if protocol in ["Biostimulator (Sculptra)", "RF Microneedling"]:
-        shift_y = int(4 * progress_factor)
+        shift_y = int(3 * progress_factor)
         M = np.float32([[1, 0, 0], [0, 1, -shift_y]])
         lifted = cv2.warpAffine(smoothed, M, (w, h), borderMode=cv2.BORDER_REFLECT)
-        smoothed = cv2.addWeighted(smoothed, 0.4, lifted, 0.6, 0)
+        smoothed = cv2.addWeighted(smoothed, 0.5, lifted, 0.5, 0)
 
-    remodeled_skin = (smoothed * mask_3ch + img_bgr * (1.0 - mask_3ch)).astype(np.uint8)
+    # Blend strictly over the isolated face mask, keeping natural skin tones intact
+    remodeled_skin = (smoothed.astype(np.float32) * mask_3ch + img_bgr.astype(np.float32) * (1.0 - mask_3ch))
+    remodeled_skin = np.clip(remodeled_skin, 0, 255).astype(np.uint8)
 
+    # 3. Healthy dermal glow & subtle warmth enhancement in LAB color space
     lab = cv2.cvtColor(remodeled_skin, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=1.0 + (0.8 * progress_factor), tileGridSize=(8, 8))
+    
+    # Gentle contrast enhancement on the lightness channel
+    clahe = cv2.createCLAHE(clipLimit=1.0 + (0.4 * progress_factor), tileGridSize=(8, 8))
     cl = clahe.apply(l)
-    enhanced_lab = cv2.merge((cl, a, b))
+    
+    # Enhance warmth (b channel) slightly for a healthy post-treatment radiance
+    b_enhanced = cv2.add(b, int(2 * progress_factor))
+    
+    enhanced_lab = cv2.merge((cl, a, b_enhanced))
     final_output = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
 
-    return final_output
+    # Final blend with original background to ensure absolute zero background distortion
+    final_composite = (final_output.astype(np.float32) * mask_3ch + img_bgr.astype(np.float32) * (1.0 - mask_3ch))
+    return np.clip(final_composite, 0, 255).astype(np.uint8)
 
 st.sidebar.header("📋 Patient Data & Protocol")
 selected_protocol = st.sidebar.selectbox(
@@ -95,7 +122,7 @@ if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    skin_mask = isolate_skin_mask(img_bgr)
+    skin_mask = isolate_facial_skin_mask(img_bgr)
     metrics = compute_skin_metrics(img_bgr, skin_mask)
 
     st.subheader("1. Quantitative Diagnostic Baseline")
@@ -121,4 +148,3 @@ if uploaded_file is not None:
         st.image(simulated_rgb, caption=f"Simulated Result ({selected_protocol} - Day {days})", use_container_width=True)
 else:
     st.info("👆 Please upload a photo to begin the analysis.")
-  
